@@ -1,0 +1,8 @@
+{
+  "name": "CBT Sekolah Rakyat Terintegrasi 5 Ponorogo",
+  "description": "Aplikasi Web Computer Based Test (CBT) Online Sekolah dan Madrasah dengan Anti-Kecurangan, Dukungan Formula KaTeX, Offline-First Sync, dan Dashboard Proktor.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
