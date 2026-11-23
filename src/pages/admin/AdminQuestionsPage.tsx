@@ -1,6 +1,7 @@
-import { CheckCircle2, Edit2, Plus, Trash2 } from 'lucide-react';
+import { CheckCircle2, Edit2, FileUp, Plus, Trash2 } from 'lucide-react';
 import React, { useCallback, useEffect, useState } from 'react';
 import { QuestionEditorModal } from '../../components/admin/QuestionEditorModal';
+import { WordQuestionImporter } from '../../components/admin/WordQuestionImporter';
 import { MathRenderer } from '../../components/cbt/MathRenderer';
 import { apiFetch } from '../../lib/api';
 import type { AdminQuestion, Exam, OptionKey } from '../../types/cbt';
@@ -14,6 +15,7 @@ export const AdminQuestionsPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
 
   const [editorOpen, setEditorOpen] = useState(false);
+  const [wordImportOpen, setWordImportOpen] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<AdminQuestion | null>(null);
 
   const loadQuestions = useCallback(async (examId: number) => {
@@ -82,18 +84,30 @@ export const AdminQuestionsPage: React.FC = () => {
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={!selectedExamId}
-          onClick={() => {
-            setEditingQuestion(null);
-            setEditorOpen(true);
-          }}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap shrink-0"
-        >
-          <Plus className="h-4 w-4" />
-          Tambah Soal Baru
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            disabled={!selectedExamId}
+            onClick={() => setWordImportOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <FileUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            Import Word / Matematika
+          </button>
+
+          <button
+            type="button"
+            disabled={!selectedExamId}
+            onClick={() => {
+              setEditingQuestion(null);
+              setEditorOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <Plus className="h-4 w-4" />
+            Tambah Soal Baru
+          </button>
+        </div>
       </div>
 
       {/* Exam Selector */}
@@ -134,17 +148,27 @@ export const AdminQuestionsPage: React.FC = () => {
           <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
             Paket ujian ini belum memiliki soal.
           </p>
-          <button
-            type="button"
-            onClick={() => {
-              setEditingQuestion(null);
-              setEditorOpen(true);
-            }}
-            className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white"
-          >
-            <Plus className="h-4 w-4" />
-            Buat Soal Pertama
-          </button>
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => setWordImportOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700"
+            >
+              <FileUp className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+              Import Kolektif Word / Matematika
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingQuestion(null);
+                setEditorOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+            >
+              <Plus className="h-4 w-4" />
+              Buat Soal Pertama
+            </button>
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
@@ -244,6 +268,17 @@ export const AdminQuestionsPage: React.FC = () => {
         nextQuestionNumber={questions.length + 1}
         onClose={() => setEditorOpen(false)}
         onSaved={() => void loadQuestions(selectedExamId)}
+      />
+
+      <WordQuestionImporter
+        open={wordImportOpen}
+        examId={selectedExamId}
+        examTitle={
+          exams.find((e) => e.id === selectedExamId)?.title || 'Paket Ujian'
+        }
+        existingCount={questions.length}
+        onClose={() => setWordImportOpen(false)}
+        onImported={() => void loadQuestions(selectedExamId)}
       />
     </div>
   );

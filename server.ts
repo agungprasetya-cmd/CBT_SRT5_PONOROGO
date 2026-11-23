@@ -7,10 +7,14 @@ import { z } from 'zod';
 import { db, gradeExamSession, initDatabase, UPLOAD_DIRECTORY } from './src/server/db.ts';
 import { POSTGRES_SCHEMA_BLUEPRINT } from './src/server/postgresBlueprint.ts';
 import {
+  deleteSupabaseRows,
   getSanitizedSupabaseConfig,
+  hydrateFromSupabaseOnStartup,
   pullMasterDataFromSupabase,
   pushLocalDataToSupabase,
   testSupabaseConnection,
+  triggerAutoPushToSupabase,
+  uploadImageToSupabaseStorage,
 } from './src/server/supabaseClient.ts';
 
 dotenv.config();
@@ -273,6 +277,7 @@ app.post('/api/student/login', (req, res) => {
     session = db
       .prepare('SELECT * FROM exam_sessions WHERE id = ?')
       .get(Number(insertRes.lastInsertRowid));
+    triggerAutoPushToSupabase();
   }
 
   // Order questions by session.question_order (NEVER exposing correct_answer)
@@ -378,6 +383,7 @@ app.post('/api/student/sync', (req, res) => {
   });
 
   syncTx();
+  triggerAutoPushToSupabase();
   res.json({ ok: true, synced_at: now, server_now: now, session_status: session.status });
 });
 
@@ -451,6 +457,7 @@ app.post('/api/student/violation', (req, res) => {
 
   if (newCount >= 3) {
     const result = gradeExamSession(session_id, 'flagged_cheating');
+    triggerAutoPushToSupabase();
     res.json({
       violations_count: newCount,
       max_violations: 3,
@@ -460,6 +467,7 @@ app.post('/api/student/violation', (req, res) => {
     return;
   }
 
+  triggerAutoPushToSupabase();
   res.json({
     violations_count: newCount,
     max_violations: 3,
@@ -516,6 +524,7 @@ app.post('/api/student/submit', (req, res) => {
     session_id,
     session.status === 'flagged_cheating' ? 'flagged_cheating' : 'completed'
   );
+  triggerAutoPushToSupabase();
 
   res.json({ ok: true, result });
 });
@@ -716,6 +725,7 @@ app.put('/api/admin/settings', requireAdmin, (req, res) => {
   `).run(school_name, logo_url, academic_year, exam_event_name, default_kkm, proctor_pin, now);
 
   const updated = db.prepare('SELECT * FROM institution_settings LIMIT 1').get();
+  triggerAutoPushToSupabase();
   res.json({ settings: updated });
 });
 
@@ -725,7 +735,7 @@ const uploadImageSchema = z.object({
   prefix: z.string().trim().optional().default('img'),
 });
 
-app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
+app.post('/api/admin/upload-image', requireAdmin, async (req, res) => {
   const parsed = uploadImageSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: 'Format gambar tidak valid' });
@@ -738,7 +748,9 @@ app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
     return;
   }
 
-  const ext = matches[1].toLowerCase() === 'jpeg' ? 'jpg' : matches[1].toLowerCase();
+  const rawExt = matches[1].toLowerCase();
+  const ext = rawExt === 'jpeg' ? 'jpg' : rawExt;
+  const contentType = rawExt === 'jpg' ? 'image/jpeg' : `image/${rawExt}`;
   const buffer = Buffer.from(matches[2], 'base64');
   if (buffer.byteLength > 800 * 1024) {
     res.status(400).json({ error: 'Ukuran gambar terkompresi melebihi batas maksimal 800KB' });
@@ -749,7 +761,12 @@ app.post('/api/admin/upload-image', requireAdmin, (req, res) => {
   const filename = `${safePrefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`;
   fs.writeFileSync(path.join(UPLOAD_DIRECTORY, filename), buffer);
 
-  res.json({ url: `/uploads/${filename}`, size_bytes: buffer.byteLength });
+  const cloudUrl = await uploadImageToSupabaseStorage(filename, buffer, contentType);
+  res.json({
+    url: cloudUrl || `/uploads/${filename}`,
+    size_bytes: buffer.byteLength,
+    storage: cloudUrl ? 'supabase' : 'local',
+  });
 });
 
 // Participants CRUD & Bulk Import
@@ -787,6 +804,7 @@ app.post('/api/admin/participants', requireAdmin, (req, res) => {
     const created = db
       .prepare('SELECT * FROM participants WHERE id = ?')
       .get(Number(info.lastInsertRowid)) as any;
+    triggerAutoPushToSupabase();
     res.status(201).json({ participant: { ...created, is_active: Boolean(created.is_active) } });
   } catch (err: any) {
     if (String(err?.message).includes('UNIQUE')) {
@@ -816,6 +834,7 @@ app.put('/api/admin/participants/:id', requireAdmin, (req, res) => {
       id
     );
     const updated = db.prepare('SELECT * FROM participants WHERE id = ?').get(id) as any;
+    triggerAutoPushToSupabase();
     res.json({ participant: { ...updated, is_active: Boolean(updated.is_active) } });
   } catch (err: any) {
     if (String(err?.message).includes('UNIQUE')) {
@@ -829,6 +848,7 @@ app.put('/api/admin/participants/:id', requireAdmin, (req, res) => {
 app.delete('/api/admin/participants/:id', requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   db.prepare('DELETE FROM participants WHERE id = ?').run(id);
+  void deleteSupabaseRows('participants', `id=eq.${id}`);
   res.json({ ok: true });
 });
 
@@ -880,6 +900,7 @@ app.post('/api/admin/participants/import', requireAdmin, (req, res) => {
   });
 
   tx();
+  triggerAutoPushToSupabase();
   res.json({ inserted, skipped, duplicates });
 });
 
@@ -938,6 +959,7 @@ app.post('/api/admin/exams', requireAdmin, (req, res) => {
     );
 
   const created = db.prepare('SELECT * FROM exams WHERE id = ?').get(Number(info.lastInsertRowid)) as any;
+  triggerAutoPushToSupabase();
   res.status(201).json({
     exam: {
       ...created,
@@ -980,6 +1002,7 @@ app.put('/api/admin/exams/:id', requireAdmin, (req, res) => {
       'SELECT e.*, (SELECT COUNT(*) FROM questions q WHERE q.exam_id = e.id) AS question_count FROM exams e WHERE e.id = ?'
     )
     .get(id) as any;
+  triggerAutoPushToSupabase();
   res.json({
     exam: {
       ...updated,
@@ -991,7 +1014,9 @@ app.put('/api/admin/exams/:id', requireAdmin, (req, res) => {
 });
 
 app.delete('/api/admin/exams/:id', requireAdmin, (req, res) => {
-  db.prepare('DELETE FROM exams WHERE id = ?').run(Number(req.params.id));
+  const examId = Number(req.params.id);
+  db.prepare('DELETE FROM exams WHERE id = ?').run(examId);
+  void deleteSupabaseRows('exams', `id=eq.${examId}`);
   res.json({ ok: true });
 });
 
@@ -1062,7 +1087,76 @@ app.post('/api/admin/questions', requireAdmin, (req, res) => {
       q.score_weight
     );
   const created = db.prepare('SELECT * FROM questions WHERE id = ?').get(Number(info.lastInsertRowid));
+  triggerAutoPushToSupabase();
   res.status(201).json({ question: created });
+});
+
+const bulkQuestionItemSchema = questionSchema.omit({ exam_id: true });
+const bulkQuestionsSchema = z.object({
+  exam_id: z.number().int().positive(),
+  replace_existing: z.boolean().optional().default(false),
+  questions: z
+    .array(bulkQuestionItemSchema)
+    .min(1, 'Minimal 1 butir soal untuk diimpor')
+    .max(500, 'Maksimal 500 butir soal dalam satu kali impor'),
+});
+
+app.post('/api/admin/questions/bulk', requireAdmin, async (req, res) => {
+  const parsed = bulkQuestionsSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message || 'Data impor soal tidak valid' });
+    return;
+  }
+
+  const { exam_id, replace_existing, questions } = parsed.data;
+  const exam = db.prepare('SELECT id FROM exams WHERE id = ?').get(exam_id);
+  if (!exam) {
+    res.status(404).json({ error: 'Paket ujian tidak ditemukan.' });
+    return;
+  }
+
+  const insertStmt = db.prepare(`
+    INSERT INTO questions (
+      exam_id, question_number, question_text, image_url,
+      option_a, option_b, option_c, option_d, option_e,
+      option_a_image, option_b_image, option_c_image, option_d_image, option_e_image,
+      correct_answer, score_weight
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const tx = db.transaction(() => {
+    if (replace_existing) {
+      db.prepare('DELETE FROM questions WHERE exam_id = ?').run(exam_id);
+    }
+
+    for (const q of questions) {
+      insertStmt.run(
+        exam_id,
+        q.question_number,
+        q.question_text,
+        q.image_url || null,
+        q.option_a,
+        q.option_b,
+        q.option_c,
+        q.option_d,
+        q.option_e,
+        q.option_a_image || null,
+        q.option_b_image || null,
+        q.option_c_image || null,
+        q.option_d_image || null,
+        q.option_e_image || null,
+        q.correct_answer,
+        q.score_weight
+      );
+    }
+  });
+
+  tx();
+  if (replace_existing) {
+    await deleteSupabaseRows('questions', `exam_id=eq.${exam_id}`);
+  }
+  triggerAutoPushToSupabase();
+  res.status(201).json({ inserted: questions.length, replaced: replace_existing });
 });
 
 app.put('/api/admin/questions/:id', requireAdmin, (req, res) => {
@@ -1100,11 +1194,14 @@ app.put('/api/admin/questions/:id', requireAdmin, (req, res) => {
     id
   );
   const updated = db.prepare('SELECT * FROM questions WHERE id = ?').get(id);
+  triggerAutoPushToSupabase();
   res.json({ question: updated });
 });
 
 app.delete('/api/admin/questions/:id', requireAdmin, (req, res) => {
-  db.prepare('DELETE FROM questions WHERE id = ?').run(Number(req.params.id));
+  const qId = Number(req.params.id);
+  db.prepare('DELETE FROM questions WHERE id = ?').run(qId);
+  void deleteSupabaseRows('questions', `id=eq.${qId}`);
   res.json({ ok: true });
 });
 
@@ -1191,6 +1288,7 @@ app.post('/api/admin/sessions/:sessionId/reset', requireAdmin, (req, res) => {
     db.prepare('DELETE FROM exam_sessions WHERE id = ?').run(sessionId);
   });
   resetTx();
+  void deleteSupabaseRows('exam_sessions', `id=eq.${sessionId}`);
   res.json({ ok: true });
 });
 
@@ -1202,6 +1300,7 @@ app.post('/api/admin/sessions/:sessionId/force-finish', requireAdmin, (req, res)
     return;
   }
   const result = gradeExamSession(sessionId, 'completed');
+  triggerAutoPushToSupabase();
   res.json({ ok: true, result });
 });
 
@@ -1333,7 +1432,7 @@ app.post('/api/admin/supabase/sync-push', requireAdmin, async (_req, res) => {
 
 app.post('/api/admin/supabase/sync-pull', requireAdmin, async (_req, res) => {
   try {
-    const result = await pullMasterDataFromSupabase();
+    const result = await pullMasterDataFromSupabase({ replaceLocalIfHasData: true });
     res.json({ ...result, config: getSanitizedSupabaseConfig() });
   } catch (err: any) {
     res.status(400).json({ error: err?.message || 'Gagal menarik data dari Supabase.' });
@@ -1344,6 +1443,8 @@ app.post('/api/admin/supabase/sync-pull', requireAdmin, async (_req, res) => {
 // VITE DEV MIDDLEWARE / PRODUCTION STATIC HOSTING
 // ============================================================================
 async function startServer() {
+  await hydrateFromSupabaseOnStartup();
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

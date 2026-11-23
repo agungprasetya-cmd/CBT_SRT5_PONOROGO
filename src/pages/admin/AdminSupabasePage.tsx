@@ -28,6 +28,9 @@ interface SanitizedSupabaseConfig {
   last_tested_at: string | null;
   last_status: string;
   last_message: string;
+  auto_sync_active: boolean;
+  startup_hydrated: boolean;
+  last_auto_sync_at: string | null;
 }
 
 interface TestResult {
@@ -188,6 +191,8 @@ export const AdminSupabasePage: React.FC = () => {
           exams: number;
           participants: number;
           questions: number;
+          exam_sessions?: number;
+          exam_results?: number;
         };
       }>('/api/admin/supabase/sync-pull', {
         method: 'POST',
@@ -195,7 +200,7 @@ export const AdminSupabasePage: React.FC = () => {
       });
       setFeedback({
         type: 'success',
-        text: `Berhasil menarik master data dari Supabase (${res.pulled.exams} paket ujian, ${res.pulled.participants} peserta, ${res.pulled.questions} soal).`,
+        text: `Berhasil menarik data dari Supabase (${res.pulled.exams} paket ujian, ${res.pulled.participants} peserta, ${res.pulled.questions} soal, ${res.pulled.exam_results ?? 0} hasil ujian).`,
       });
     } catch (err: any) {
       setFeedback({
@@ -252,6 +257,69 @@ export const AdminSupabasePage: React.FC = () => {
         </div>
       </div>
 
+      {/* AI Studio Persistence Notice */}
+      {config && (
+        <div
+          className={`rounded-xl border p-4 text-xs space-y-2 ${
+            config.source === 'env' || config.source === 'mixed'
+              ? 'border-emerald-300 bg-emerald-50/70 text-emerald-950 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100'
+              : 'border-amber-300 bg-amber-50/70 text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100'
+          }`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="font-bold flex items-center gap-2">
+              {config.source === 'env' || config.source === 'mixed' ? (
+                <>
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  Mode Permanen Aktif (AI Studio Secrets + Sinkronisasi Otomatis)
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
+                  Agar Koneksi &amp; Data Tidak Hilang Setiap Login Ulang ke AI Studio
+                </>
+              )}
+            </p>
+            {config.auto_sync_active && (
+              <span className="rounded bg-emerald-600 px-2 py-0.5 text-[10px] font-semibold text-white">
+                Auto-Sync Aktif
+              </span>
+            )}
+          </div>
+          {config.source === 'env' || config.source === 'mixed' ? (
+            <p className="leading-relaxed">
+              Kredensial Supabase terdeteksi dari <strong>AI Studio Secrets / Environment</strong>.
+              Setiap kali server menyala, seluruh data peserta, soal, paket ujian, dan hasil
+              otomatis dimuat dari Supabase, dan setiap perubahan langsung tersimpan ke Supabase.
+            </p>
+          ) : (
+            <div className="space-y-1.5 leading-relaxed">
+              <p>
+                Penyimpanan lokal container (<code className="font-mono">./data/cbt.db</code>)
+                bersifat sementara dan akan ter-reset saat sesi AI Studio dimulai ulang. Agar data
+                &amp; koneksi Supabase <strong>permanen otomatis setiap login</strong>, simpan 4
+                variabel berikut di panel <strong>Secrets</strong> (ikon kunci di sidebar kiri AI
+                Studio):
+              </p>
+              <div className="flex flex-wrap gap-2 font-mono text-[11px] pt-1">
+                <code className="rounded bg-white/80 dark:bg-slate-900 px-2 py-0.5 border border-amber-300 dark:border-amber-800">
+                  SUPABASE_URL
+                </code>
+                <code className="rounded bg-white/80 dark:bg-slate-900 px-2 py-0.5 border border-amber-300 dark:border-amber-800">
+                  SUPABASE_ANON_KEY
+                </code>
+                <code className="rounded bg-white/80 dark:bg-slate-900 px-2 py-0.5 border border-amber-300 dark:border-amber-800">
+                  SUPABASE_SERVICE_ROLE_KEY
+                </code>
+                <code className="rounded bg-white/80 dark:bg-slate-900 px-2 py-0.5 border border-amber-300 dark:border-amber-800">
+                  SUPABASE_STORAGE_BUCKET
+                </code>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Status Summary Strip */}
       {config && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -304,11 +372,11 @@ export const AdminSupabasePage: React.FC = () => {
             <p className="mt-1 font-mono text-[11px] text-slate-500 dark:text-slate-400">
               Sumber:{' '}
               {config.source === 'env'
-                ? 'Server Environment (.env)'
+                ? 'AI Studio Secrets (.env)'
                 : config.source === 'admin_db'
-                  ? 'Konfigurasi Server Admin'
+                  ? 'SQLite Sementara (Admin UI)'
                   : config.source === 'mixed'
-                    ? 'Admin + Environment (.env)'
+                    ? 'Admin + AI Studio Secrets'
                     : 'Kosong'}
             </p>
           </div>
@@ -335,11 +403,13 @@ export const AdminSupabasePage: React.FC = () => {
                 className="inline-flex items-center gap-1 rounded-lg border border-slate-300 dark:border-slate-700 px-2.5 py-1.5 text-[11px] font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 disabled:opacity-40"
               >
                 <ArrowDownToLine className="h-3.5 w-3.5" />
-                {syncing === 'pull' ? 'Menarik...' : 'Pull Master'}
+                {syncing === 'pull' ? 'Menarik...' : 'Tarik dari Supabase'}
               </button>
             </div>
             <p className="mt-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-              Migrasi & sinkronisasi instan antar server.
+              {config.auto_sync_active
+                ? 'Auto-sync aktif pada setiap perubahan data.'
+                : 'Migrasi & sinkronisasi instan antar server.'}
             </p>
           </div>
         </div>

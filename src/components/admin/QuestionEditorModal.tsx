@@ -1,7 +1,9 @@
-import { Eye, ImagePlus, Loader2, Trash2, X } from 'lucide-react';
+import { Eye, ImagePlus, Loader2, Sigma, Sparkles, Trash2, X } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../lib/api';
 import { compressImageToDataUrl } from '../../lib/image-compress';
+import { MATH_SYMBOL_CATEGORIES } from '../../lib/math-symbols';
+import { normalizeMathText } from '../../lib/omml-to-latex';
 import type { AdminQuestion, OptionKey } from '../../types/cbt';
 import { MathRenderer } from '../cbt/MathRenderer';
 
@@ -13,22 +15,6 @@ interface QuestionEditorModalProps {
   onClose: () => void;
   onSaved: (question: AdminQuestion, isNew: boolean) => void;
 }
-
-const MATH_SNIPPETS: Array<{ label: string; snippet: string }> = [
-  { label: 'Pecahan', snippet: '$\\frac{a}{b}$' },
-  { label: 'Akar', snippet: '$\\sqrt{x}$' },
-  { label: 'Pangkat', snippet: '$x^{2}$' },
-  { label: 'Integral', snippet: '$$\\int_{a}^{b} f(x)\\,dx$$' },
-  { label: 'Limit', snippet: '$$\\lim_{x \\to 0} \\frac{\\sin x}{x}$$' },
-  { label: 'Sigma', snippet: '$\\sum_{i=1}^{n} x_i$' },
-  { label: 'Kesetimbangan', snippet: '$\\rightleftharpoons$' },
-  { label: 'Panah Reaksi', snippet: '$\\rightarrow$' },
-  { label: 'Matriks 2x2', snippet: '$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$' },
-  { label: 'Delta', snippet: '$\\Delta$' },
-  { label: 'Theta', snippet: '$\\theta$' },
-  { label: 'Pi', snippet: '$\\pi$' },
-  { label: 'Ohm', snippet: '$\\Omega$' },
-];
 
 const OPTION_KEYS: OptionKey[] = ['A', 'B', 'C', 'D', 'E'];
 
@@ -62,12 +48,22 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [previewTab, setPreviewTab] = useState<'live' | 'student'>('live');
+  const [symbolTab, setSymbolTab] = useState<string>(MATH_SYMBOL_CATEGORIES[0].id);
+  const [activeField, setActiveField] = useState<'question' | OptionKey>('question');
 
   const questionTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const optionInputRefs = useRef<Record<OptionKey, HTMLInputElement | null>>({
+    A: null,
+    B: null,
+    C: null,
+    D: null,
+    E: null,
+  });
 
   useEffect(() => {
     if (!open) return;
     setError(null);
+    setActiveField('question');
     if (initialQuestion) {
       setQuestionNumber(initialQuestion.question_number);
       setQuestionText(initialQuestion.question_text);
@@ -104,20 +100,49 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
   if (!open) return null;
 
   const insertSnippet = (snippet: string) => {
-    const el = questionTextareaRef.current;
-    if (!el) {
-      setQuestionText((prev) => `${prev} ${snippet}`.trim());
+    if (activeField === 'question') {
+      const el = questionTextareaRef.current;
+      if (!el) {
+        setQuestionText((prev) => `${prev} ${snippet}`.trim());
+        return;
+      }
+      const start = el.selectionStart ?? questionText.length;
+      const end = el.selectionEnd ?? questionText.length;
+      const next = questionText.slice(0, start) + snippet + questionText.slice(end);
+      setQuestionText(next);
+      requestAnimationFrame(() => {
+        el.focus();
+        const cursor = start + snippet.length;
+        el.setSelectionRange(cursor, cursor);
+      });
       return;
     }
-    const start = el.selectionStart ?? questionText.length;
-    const end = el.selectionEnd ?? questionText.length;
-    const next = questionText.slice(0, start) + snippet + questionText.slice(end);
-    setQuestionText(next);
+
+    const optKey = activeField;
+    const el = optionInputRefs.current[optKey];
+    const currentVal = getOptionVal(optKey);
+    if (!el) {
+      setOptionVal(optKey, `${currentVal} ${snippet}`.trim());
+      return;
+    }
+    const start = el.selectionStart ?? currentVal.length;
+    const end = el.selectionEnd ?? currentVal.length;
+    const next = currentVal.slice(0, start) + snippet + currentVal.slice(end);
+    setOptionVal(optKey, next);
     requestAnimationFrame(() => {
       el.focus();
       const cursor = start + snippet.length;
       el.setSelectionRange(cursor, cursor);
     });
+  };
+
+  const handleNormalizeAllMath = () => {
+    setQuestionText((prev) => normalizeMathText(prev));
+    setOptionA((prev) => normalizeMathText(prev));
+    setOptionB((prev) => normalizeMathText(prev));
+    setOptionC((prev) => normalizeMathText(prev));
+    setOptionD((prev) => normalizeMathText(prev));
+    setOptionE((prev) => normalizeMathText(prev));
   };
 
   const handleImageUpload = async (
@@ -317,20 +342,62 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
               </div>
             </div>
 
-            {/* Quick Math Toolbar */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
-                Sisip Simbol Eksakta Cepat (KaTeX)
-              </label>
-              <div className="flex flex-wrap gap-1.5">
-                {MATH_SNIPPETS.map((item) => (
+            {/* Categorized Special Math Symbol Toolbar */}
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 p-3.5 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sigma className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                  <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    Palet Simbol Khusus Matematika
+                  </span>
+                  <span className="rounded bg-blue-100 dark:bg-blue-950 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:text-blue-300">
+                    Target: {activeField === 'question' ? 'Pertanyaan' : `Opsi ${activeField}`}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleNormalizeAllMath}
+                  title="Konversi simbol tempelan seperti √(x+1), ½, ¾ menjadi rumus KaTeX"
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  <Sparkles className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+                  Rapikan Simbol ke KaTeX
+                </button>
+              </div>
+
+              <div className="flex flex-wrap gap-1.5 border-b border-slate-200 dark:border-slate-800 pb-2">
+                {MATH_SYMBOL_CATEGORIES.map((cat) => (
                   <button
-                    key={item.label}
+                    key={cat.id}
                     type="button"
-                    onClick={() => insertSnippet(item.snippet)}
-                    className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-200 hover:border-blue-500 hover:text-blue-600 transition-colors"
+                    onClick={() => setSymbolTab(cat.id)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                      symbolTab === cat.id
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-blue-400'
+                    }`}
                   >
-                    {item.label}
+                    {cat.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  MATH_SYMBOL_CATEGORIES.find((c) => c.id === symbolTab) ||
+                  MATH_SYMBOL_CATEGORIES[0]
+                ).items.map((item) => (
+                  <button
+                    key={item.label + item.snippet}
+                    type="button"
+                    title={item.title}
+                    onClick={() => insertSnippet(item.snippet)}
+                    className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-200 hover:border-blue-500 hover:text-blue-600 transition-colors"
+                  >
+                    <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
+                      {item.preview}
+                    </span>
+                    {item.label !== item.preview && <span>{item.label}</span>}
                   </button>
                 ))}
               </div>
@@ -345,8 +412,9 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
                 rows={4}
                 required
                 value={questionText}
+                onFocus={() => setActiveField('question')}
                 onChange={(e) => setQuestionText(e.target.value)}
-                placeholder="Tulis pertanyaan di sini. Contoh: Tentukan nilai dari $\int_0^2 x^2\,dx$..."
+                placeholder="Tulis atau tempel soal matematika. Contoh: Tentukan nilai dari $\int_0^2 x^2\,dx$..."
                 className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3.5 py-2.5 text-sm focus:border-blue-600 focus:outline-none"
               />
             </div>
@@ -419,9 +487,13 @@ export const QuestionEditorModal: React.FC<QuestionEditorModalProps> = ({
                       {key}
                     </span>
                     <input
+                      ref={(el) => {
+                        optionInputRefs.current[key] = el;
+                      }}
                       type="text"
                       required
                       value={getOptionVal(key)}
+                      onFocus={() => setActiveField(key)}
                       onChange={(e) => setOptionVal(key, e.target.value)}
                       placeholder={`Teks atau rumus LaTeX untuk opsi ${key}`}
                       className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-1.5 text-sm"

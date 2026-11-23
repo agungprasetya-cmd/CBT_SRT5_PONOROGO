@@ -47,3 +47,17 @@ export async function compressImageToDataUrl(
     sizeBytes: estimateBytes(dataUrl),
   };
 }
+
+export async function compressImageDataUrl(
+  rawDataUrl: string,
+  maxBytes = 500 * 1024,
+  maxDimension = 1280
+): Promise<{ dataUrl: string; sizeBytes: number }> {
+  const response = await fetch(rawDataUrl);
+  const blob = await response.blob();
+  const mime = blob.type && blob.type.startsWith('image/') ? blob.type : 'image/png';
+  const ext = mime.split('/')[1] || 'png';
+  const file = new File([blob], `word_img.${ext}`, { type: mime });
+  return compressImageToDataUrl(file, maxBytes, maxDimension);
+}
+
